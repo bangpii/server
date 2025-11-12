@@ -1,0 +1,16 @@
+server/
+├── controllers/
+│   ├── authController.js
+│   └── fileController.js
+├── middleware/
+│   ├── authMiddleware.js
+│   └── uploadMiddleware.js
+├── models/
+│   └── File.js
+├── routes/
+│   ├── authRoutes.js
+│   └── fileRoutes.js
+├── uploads/
+├── .env
+├── server.js
+└── package.json
