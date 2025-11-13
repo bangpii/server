@@ -10,7 +10,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Backend server for CloudPii mobile app",
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
