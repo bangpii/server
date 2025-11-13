@@ -208,6 +208,49 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// Tambahkan error handling yang lebih baik
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    console.log('📤 Upload request received');
+    
+    if (!req.file) {
+      console.log('❌ No file in request');
+      return res.status(400).json({ 
+        success: false,
+        error: 'No file uploaded' 
+      });
+    }
+
+    // Validasi field yang diperlukan
+    const { userId, userEmail, fileName } = req.body;
+    
+    console.log('📝 Upload data:', {
+      userId: userId || 'missing',
+      userEmail: userEmail || 'missing',
+      fileName: fileName || 'missing',
+      originalName: req.file.originalname,
+      fileSize: req.file.size
+    });
+
+    if (!userId || !userEmail) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'User ID and email are required' 
+      });
+    }
+
+    // Lanjutkan dengan logic upload...
+    
+  } catch (error) {
+    console.error('❌ Upload error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error',
+      details: error.message 
+    });
+  }
+});
+
 // Get user files
 app.get('/api/files/:userId', async (req, res) => {
   try {
