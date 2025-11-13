@@ -18,12 +18,13 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware
+// Middleware - FIXED: Tambah limit untuk body parser
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/uploads', express.static('uploads'));
 
-// Inisialisasi Firebase Admin - HANYA dari environment variables
+// Inisialisasi Firebase Admin
 let db;
 try {
   // Validasi environment variables
@@ -54,7 +55,8 @@ try {
   console.error('❌ Firebase Admin initialization error:', error.message);
   console.log('🔄 Server will run without Firebase connection');
 }
-// Konfigurasi Multer untuk file upload
+
+// Konfigurasi Multer untuk file upload - FIXED: Tambah error handling
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads';
@@ -110,7 +112,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Upload file endpoint
+// Upload file endpoint - FIXED: Tambah error handling yang lebih baik
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     console.log('📤 Upload request received');
@@ -198,49 +200,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       file: fileData
     });
 
-  } catch (error) {
-    console.error('❌ Upload error:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Internal server error',
-      details: error.message 
-    });
-  }
-});
-
-// Tambahkan error handling yang lebih baik
-app.post('/api/upload', upload.single('file'), async (req, res) => {
-  try {
-    console.log('📤 Upload request received');
-    
-    if (!req.file) {
-      console.log('❌ No file in request');
-      return res.status(400).json({ 
-        success: false,
-        error: 'No file uploaded' 
-      });
-    }
-
-    // Validasi field yang diperlukan
-    const { userId, userEmail, fileName } = req.body;
-    
-    console.log('📝 Upload data:', {
-      userId: userId || 'missing',
-      userEmail: userEmail || 'missing',
-      fileName: fileName || 'missing',
-      originalName: req.file.originalname,
-      fileSize: req.file.size
-    });
-
-    if (!userId || !userEmail) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'User ID and email are required' 
-      });
-    }
-
-    // Lanjutkan dengan logic upload...
-    
   } catch (error) {
     console.error('❌ Upload error:', error);
     res.status(500).json({ 
@@ -434,7 +393,7 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// 404 handler - FIXED: Gunakan approach yang benar untuk Express 4
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
     success: false,
