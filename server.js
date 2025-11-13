@@ -11,52 +11,118 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
-// ES6 module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Middleware - FIXED: Tambah limit untuk body parser
+// Middleware
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use('/uploads', express.static('uploads'));
 
-// Inisialisasi Firebase Admin
-let db;
-try {
-  // Validasi environment variables
-  if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_PRIVATE_KEY || !process.env.FIREBASE_CLIENT_EMAIL) {
-    throw new Error('Firebase environment variables are missing');
+// Inisialisasi Firebase Admin dengan Base64
+let db = null;
+let firebaseInitialized = false;
+
+const initializeFirebase = async () => {
+  try {
+    console.log('🔄 Initializing Firebase Admin...');
+
+    // Check if Base64 credentials exist
+    if (!process.env.FIREBASE_CREDENTIALS_B64) {
+      throw new Error('FIREBASE_CREDENTIALS_B64 environment variable is missing');
+    }
+
+    console.log('🔧 Firebase Config:');
+    console.log('   - Using Base64 credentials');
+    console.log('   - Base64 length:', process.env.FIREBASE_CREDENTIALS_B64.length);
+
+    // Decode Base64 credentials
+    const credentialsJson = Buffer.from(process.env.FIREBASE_CREDENTIALS_B64, 'base64').toString('utf8');
+    const serviceAccount = JSON.parse(credentialsJson);
+
+    console.log('   - Project ID:', serviceAccount.project_id);
+    console.log('   - Client Email:', serviceAccount.client_email);
+    console.log('   - Private Key Length:', serviceAccount.private_key?.length || 0);
+
+    // Validate private key format
+    if (!serviceAccount.private_key || !serviceAccount.private_key.includes('BEGIN PRIVATE KEY')) {
+      throw new Error('Invalid private key format in service account');
+    }
+
+    // Initialize Firebase Admin
+    if (admin.apps.length === 0) {
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`
+      });
+      console.log('   - Firebase app initialized');
+    } else {
+      console.log('   - Firebase app already initialized');
+    }
+    
+    db = admin.firestore();
+    console.log('   - Firestore instance created');
+    
+    // Test connection dengan operasi sederhana
+    console.log('🧪 Testing Firebase connection...');
+    
+    const testRef = db.collection('server_tests').doc('connection_test');
+    const testData = {
+      timestamp: new Date().toISOString(),
+      message: 'Firebase connection test from server',
+      status: 'testing'
+    };
+
+    // Test write operation
+    await testRef.set(testData);
+    console.log('   - Write test: ✅ SUCCESS');
+
+    // Test read operation
+    const docSnapshot = await testRef.get();
+    if (docSnapshot.exists) {
+      console.log('   - Read test: ✅ SUCCESS');
+      
+      // Update with success status
+      await testRef.update({
+        status: 'connected',
+        connectedAt: new Date().toISOString()
+      });
+      
+      firebaseInitialized = true;
+      console.log('✅ Firebase Admin & Firestore initialized successfully');
+      console.log('🔥 Firebase Status: FULLY OPERATIONAL');
+      
+    } else {
+      throw new Error('Firebase read test failed - document not found');
+    }
+    
+  } catch (error) {
+    console.error('❌ Firebase Admin initialization error:', error.message);
+    
+    // Detailed error information
+    if (error.message.includes('UNAUTHENTICATED')) {
+      console.error('🔐 Authentication failed. Issues:');
+      console.error('   1. Service account credentials invalid');
+      console.error('   2. Project ID mismatch');
+      console.error('   3. Service account disabled');
+      console.error('   4. Incorrect permissions');
+    }
+    
+    if (error.message.includes('JSON')) {
+      console.error('🔧 JSON parsing error - check Base64 format');
+    }
+    
+    console.log('🔄 Server will run without Firebase connection');
+    firebaseInitialized = false;
+    db = null;
   }
+};
 
-  const serviceAccount = {
-    type: "service_account",
-    project_id: process.env.FIREBASE_PROJECT_ID,
-    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    client_id: process.env.FIREBASE_CLIENT_ID,
-    auth_uri: "https://accounts.google.com/o/oauth2/auth",
-    token_uri: "https://oauth2.googleapis.com/token",
-    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-    client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
-  };
-
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
-  
-  db = admin.firestore();
-  console.log('✅ Firebase Admin & Firestore initialized from environment variables');
-} catch (error) {
-  console.error('❌ Firebase Admin initialization error:', error.message);
-  console.log('🔄 Server will run without Firebase connection');
-}
-
-// Konfigurasi Multer untuk file upload - FIXED: Tambah error handling
+// Konfigurasi Multer untuk file upload
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = 'uploads';
@@ -98,21 +164,22 @@ function getFileType(mimetype) {
   return 'file';
 }
 
-// Routes
+// ==================== ROUTES ====================
 
-// Health check
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     message: 'CloudPii Server is running',
     timestamp: new Date().toISOString(),
     port: PORT,
-    firebase: db ? 'connected' : 'disabled',
-    base_url: process.env.BASE_URL
+    firebase: firebaseInitialized ? 'connected' : 'disabled',
+    base_url: process.env.BASE_URL,
+    environment: process.env.NODE_ENV
   });
 });
 
-// Upload file endpoint - FIXED: Tambah error handling yang lebih baik
+// Upload file endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     console.log('📤 Upload request received');
@@ -128,12 +195,12 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const { userId, userEmail, fileName } = req.body;
     
     console.log('📝 Upload data:', {
-      userId,
-      userEmail,
-      fileName,
+      userId: userId || 'not provided',
+      userEmail: userEmail || 'not provided',
+      fileName: fileName || 'not provided',
       originalName: req.file.originalname,
-      uploadedFile: req.file.filename,
-      fileSize: req.file.size
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype
     });
 
     if (!userId || !userEmail) {
@@ -143,9 +210,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       });
     }
 
-    // Generate user document name dari email
-    const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
-    
     // File information
     const fileData = {
       id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -162,11 +226,18 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       uploadedAt: new Date().toISOString(),
     };
 
-    console.log('💾 Saving to Firebase:', fileData);
+    let firebaseSaveSuccess = false;
+    let firebaseError = null;
 
-    // Simpan ke Firebase Firestore jika tersedia
-    if (db) {
+    // Simpan ke Firebase jika tersedia
+    if (firebaseInitialized && db) {
       try {
+        const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
+        
+        console.log('💾 Saving to Firebase...');
+        console.log('   - Collection: cloudpii/' + userDocName + '/files');
+        console.log('   - Document ID:', fileData.id);
+        
         await db
           .collection('cloudpii')
           .doc(userDocName)
@@ -175,30 +246,47 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
           .set({
             ...fileData,
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
+        
+        firebaseSaveSuccess = true;
         console.log(`✅ File saved to Firebase: ${fileData.name}`);
-      } catch (firebaseError) {
-        console.error('❌ Firebase save error:', firebaseError);
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to save file to database',
-          details: firebaseError.message
-        });
+        
+      } catch (error) {
+        firebaseError = error.message;
+        console.error('❌ Firebase save error:', error.message);
+        console.error('🔧 Firebase error details:', error);
       }
     } else {
-      return res.status(500).json({
-        success: false,
-        error: 'Database not available'
-      });
+      console.log('ℹ️  Firebase not available, saving file locally only');
     }
 
-    console.log(`✅ File uploaded successfully for user ${userEmail}: ${fileData.name}`);
+    console.log(`✅ File uploaded successfully: ${fileData.name}`);
 
-    res.status(201).json({
-      success: true,
-      message: 'File uploaded successfully',
-      file: fileData
-    });
+    // Response based on Firebase status
+    if (firebaseSaveSuccess) {
+      res.status(201).json({
+        success: true,
+        message: 'File uploaded successfully to Firebase',
+        file: fileData,
+        storage: 'firebase'
+      });
+    } else if (firebaseError) {
+      res.status(201).json({
+        success: true,
+        message: 'File uploaded locally (Firebase failed)',
+        file: fileData,
+        storage: 'local',
+        warning: 'Firebase save failed: ' + firebaseError
+      });
+    } else {
+      res.status(201).json({
+        success: true,
+        message: 'File uploaded locally',
+        file: fileData,
+        storage: 'local'
+      });
+    }
 
   } catch (error) {
     console.error('❌ Upload error:', error);
@@ -226,27 +314,43 @@ app.get('/api/files/:userId', async (req, res) => {
     }
 
     let files = [];
+    let source = 'none';
 
-    if (db) {
-      const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
-      const snapshot = await db
-        .collection('cloudpii')
-        .doc(userDocName)
-        .collection('files')
-        .orderBy('createdAt', 'desc')
-        .get();
+    if (firebaseInitialized && db) {
+      try {
+        const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
+        console.log('🔍 Querying Firebase for user:', userDocName);
+        
+        const snapshot = await db
+          .collection('cloudpii')
+          .doc(userDocName)
+          .collection('files')
+          .orderBy('createdAt', 'desc')
+          .get();
 
-      files = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+        files = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+
+        source = 'firebase';
+        console.log(`📁 Found ${files.length} files from Firebase for user ${userEmail}`);
+        
+      } catch (firebaseError) {
+        console.error('❌ Firebase query error:', firebaseError.message);
+        files = [];
+        source = 'error';
+      }
+    } else {
+      console.log('ℹ️  Firebase not available, returning empty file list');
+      source = 'unavailable';
     }
-
-    console.log(`📁 Found ${files.length} files for user ${userEmail}`);
 
     res.json({
       success: true,
-      files: files
+      files: files,
+      source: source,
+      count: files.length
     });
 
   } catch (error) {
@@ -265,25 +369,36 @@ app.get('/api/files', async (req, res) => {
     console.log('📥 Get all files request');
     
     let files = [];
+    let source = 'none';
 
-    if (db) {
-      const snapshot = await db
-        .collectionGroup('files')
-        .orderBy('createdAt', 'desc')
-        .limit(50)
-        .get();
+    if (firebaseInitialized && db) {
+      try {
+        const snapshot = await db
+          .collectionGroup('files')
+          .orderBy('createdAt', 'desc')
+          .limit(50)
+          .get();
 
-      files = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+        files = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        
+        source = 'firebase';
+      } catch (firebaseError) {
+        console.error('❌ Firebase query error:', firebaseError.message);
+        files = [];
+        source = 'error';
+      }
     }
 
-    console.log(`📁 Found ${files.length} total files`);
+    console.log(`📁 Found ${files.length} total files from ${source}`);
 
     res.json({
       success: true,
-      files: files
+      files: files,
+      source: source,
+      count: files.length
     });
 
   } catch (error) {
@@ -310,21 +425,38 @@ app.delete('/api/files/:fileId', async (req, res) => {
       });
     }
 
-    if (db) {
-      const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
-      await db
-        .collection('cloudpii')
-        .doc(userDocName)
-        .collection('files')
-        .doc(fileId)
-        .delete();
+    let deletedFromFirebase = false;
+
+    if (firebaseInitialized && db) {
+      try {
+        const userDocName = userEmail.replace(/@/g, '_').replace(/\./g, '_');
+        await db
+          .collection('cloudpii')
+          .doc(userDocName)
+          .collection('files')
+          .doc(fileId)
+          .delete();
+        
+        deletedFromFirebase = true;
+        console.log(`✅ File ${fileId} deleted from Firebase`);
+      } catch (firebaseError) {
+        console.error('❌ Firebase delete error:', firebaseError.message);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to delete from database',
+          details: firebaseError.message
+        });
+      }
     }
+
+    // TODO: Delete physical file from uploads directory
 
     console.log(`✅ File ${fileId} deleted successfully`);
 
     res.json({ 
       success: true, 
-      message: 'File deleted successfully' 
+      message: 'File deleted successfully',
+      deletedFrom: deletedFromFirebase ? 'firebase' : 'local'
     });
 
   } catch (error) {
@@ -371,15 +503,75 @@ app.get('/api/download/:filename', (req, res) => {
   }
 });
 
+// Test Firebase connection endpoint
+app.get('/api/test-firebase', async (req, res) => {
+  try {
+    if (!firebaseInitialized || !db) {
+      return res.json({
+        success: false,
+        message: 'Firebase not initialized',
+        firebase: 'disabled',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Test write operation
+    const testRef = db.collection('server_tests').doc('api_test');
+    const testData = {
+      timestamp: new Date().toISOString(),
+      test: true,
+      message: 'API connection test',
+      randomId: Math.random().toString(36).substr(2, 9)
+    };
+
+    await testRef.set(testData);
+
+    // Test read operation
+    const testDoc = await testRef.get();
+
+    // Test query operation
+    const querySnapshot = await db.collection('server_tests')
+      .where('test', '==', true)
+      .orderBy('timestamp', 'desc')
+      .limit(5)
+      .get();
+
+    const recentTests = querySnapshot.docs.map(doc => doc.data());
+
+    res.json({
+      success: true,
+      message: 'Firebase connection test successful',
+      firebase: {
+        write: true,
+        read: testDoc.exists,
+        query: !querySnapshot.empty,
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        timestamp: new Date().toISOString(),
+        recentTests: recentTests.length
+      }
+    });
+
+  } catch (error) {
+    res.json({
+      success: false,
+      message: 'Firebase connection test failed',
+      error: error.message,
+      firebase: 'error',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Get server info
 app.get('/api/info', (req, res) => {
   res.json({
     name: 'CloudPii Server',
     version: '1.0.0',
     status: 'running',
-    firebase: db ? 'connected' : 'disabled',
+    firebase: firebaseInitialized ? 'connected' : 'disabled',
     upload_dir: path.join(__dirname, 'uploads'),
     base_url: process.env.BASE_URL,
+    environment: process.env.NODE_ENV,
     timestamp: new Date().toISOString()
   });
 });
@@ -389,7 +581,9 @@ app.get('/api/test', (req, res) => {
   res.json({
     success: true,
     message: 'Server is working!',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    firebase: firebaseInitialized ? 'connected' : 'disabled',
+    environment: process.env.NODE_ENV
   });
 });
 
@@ -398,7 +592,8 @@ app.use((req, res) => {
   res.status(404).json({ 
     success: false,
     error: 'Endpoint not found',
-    path: req.originalUrl 
+    path: req.originalUrl,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -408,18 +603,45 @@ app.use((error, req, res, next) => {
   res.status(500).json({ 
     success: false,
     error: 'Internal server error',
-    message: error.message 
+    message: error.message,
+    timestamp: new Date().toISOString()
   });
 });
 
-app.listen(PORT, () => {
-  console.log('='.repeat(50));
-  console.log(`🚀 CloudPii Server berjalan di port ${PORT}`);
-  console.log(`📁 Upload directory: ${path.join(__dirname, 'uploads')}`);
-  console.log(`🔗 Base URL: ${process.env.BASE_URL}`);
-  console.log(`🔗 Health check: ${process.env.BASE_URL}/health`);
-  console.log(`📤 Upload endpoint: ${process.env.BASE_URL}/api/upload`);
-  console.log(`ℹ️  Server info: ${process.env.BASE_URL}/api/info`);
-  console.log(`🔥 Firebase status: ${db ? 'CONNECTED ✅' : 'DISABLED ⚠️'}`);
-  console.log('='.repeat(50));
-});
+// Start server setelah Firebase diinisialisasi
+const startServer = async () => {
+  try {
+    console.log('🚀 Starting CloudPii Server...');
+    console.log('📋 Environment:', process.env.NODE_ENV);
+    console.log('🔧 Port:', PORT);
+    
+    // Initialize Firebase first
+    await initializeFirebase();
+    
+    // Then start the server
+    app.listen(PORT, () => {
+      console.log('='.repeat(60));
+      console.log('🎉 CLOUDPII SERVER STARTED SUCCESSFULLY');
+      console.log('='.repeat(60));
+      console.log(`📍 Port: ${PORT}`);
+      console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
+      console.log(`🔗 Base URL: ${process.env.BASE_URL}`);
+      console.log(`📁 Upload directory: ${path.join(__dirname, 'uploads')}`);
+      console.log(`🔥 Firebase Status: ${firebaseInitialized ? 'CONNECTED ✅' : 'DISABLED ⚠️'}`);
+      console.log('='.repeat(60));
+      console.log('✅ Endpoints:');
+      console.log(`   Health Check: ${process.env.BASE_URL}/health`);
+      console.log(`   Upload File: ${process.env.BASE_URL}/api/upload`);
+      console.log(`   Test Firebase: ${process.env.BASE_URL}/api/test-firebase`);
+      console.log(`   Server Info: ${process.env.BASE_URL}/api/info`);
+      console.log('='.repeat(60));
+    });
+    
+  } catch (error) {
+    console.error('🚨 CRITICAL: Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Start the server
+startServer();
